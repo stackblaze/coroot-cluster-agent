@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -14,8 +15,10 @@ import (
 	"github.com/coroot/coroot-cluster-agent/common"
 	"github.com/coroot/coroot-cluster-agent/config"
 	"github.com/coroot/coroot-cluster-agent/k8s"
+	"github.com/coroot/coroot-cluster-agent/metrics/clickhouse"
 	"github.com/coroot/coroot-cluster-agent/metrics/mongo"
 	"github.com/coroot/coroot-cluster-agent/metrics/mysql"
+	"github.com/coroot/coroot-cluster-agent/metrics/opensearch"
 	"github.com/coroot/coroot-cluster-agent/metrics/postgres"
 	"github.com/coroot/coroot-cluster-agent/schema/emitter"
 	"github.com/coroot/logger"
@@ -35,6 +38,9 @@ const (
 	TargetTypeRedis     TargetType = "redis"
 	TargetTypeMongodb   TargetType = "mongodb"
 	TargetTypeMemcached TargetType = "memcached"
+	// Scraped over HTTP(S): the OpenSearch REST API, the ClickHouse HTTP interface.
+	TargetTypeOpensearch TargetType = "opensearch"
+	TargetTypeClickhouse TargetType = "clickhouse"
 )
 
 type Credentials struct {
@@ -265,6 +271,24 @@ func (t *Target) StartExporter(reg *prometheus.Registry, credentials Credentials
 		t.setCollector(collector)
 		t.stop = func() {}
 
+	case TargetTypeOpensearch:
+		baseURL, client, err := t.httpEndpoint(tlsCreds, collectTimeout)
+		if err != nil {
+			return err
+		}
+		collector := opensearch.New(baseURL, credentials.Username, credentials.Password, client, collectTimeout, t.logger)
+		t.setCollector(collector)
+		t.stop = func() { _ = collector.Close() }
+
+	case TargetTypeClickhouse:
+		baseURL, client, err := t.httpEndpoint(tlsCreds, collectTimeout)
+		if err != nil {
+			return err
+		}
+		collector := clickhouse.New(baseURL, credentials.Username, credentials.Password, client, collectTimeout, t.logger)
+		t.setCollector(collector)
+		t.stop = func() { _ = collector.Close() }
+
 	default:
 		return fmt.Errorf("unsupported target type: %s", t.Type)
 	}
@@ -280,6 +304,29 @@ func (t *Target) StopExporter(reg *prometheus.Registry) {
 		}
 		t.setCollector(nil)
 	}
+}
+
+// httpEndpoint is the base URL and client of a target scraped over HTTP(S).
+// The `tls` param: "" or "false" is plain HTTP, "true" verifies the server
+// certificate, "skip-verify" does not. A TLS secret (CA or client
+// certificate) turns TLS on unless the param says "false".
+func (t *Target) httpEndpoint(tlsCreds common.TLSCredentials, timeout time.Duration) (string, *http.Client, error) {
+	tlsParam := t.Params["tls"]
+	hasCreds := tlsCreds.CA != "" || (tlsCreds.Cert != "" && tlsCreds.Key != "")
+	transport := &http.Transport{
+		MaxIdleConnsPerHost: 1,
+		IdleConnTimeout:     2 * time.Minute,
+	}
+	scheme := "http"
+	if tlsParam != "false" && (tlsParam != "" || hasCreds) {
+		cfg, err := common.DatabaseTLSConfig(tlsCreds, tlsParam == "skip-verify")
+		if err != nil {
+			return "", nil, err
+		}
+		transport.TLSClientConfig = cfg
+		scheme = "https"
+	}
+	return scheme + "://" + t.Addr, &http.Client{Transport: transport, Timeout: timeout}, nil
 }
 
 func TargetFromConfig(i config.ApplicationInstrumentation) *Target {
@@ -389,6 +436,31 @@ func TargetFromPod(pod *k8s.Pod) *Target {
 		t = &Target{
 			Type: TargetTypeMemcached,
 			Addr: net.JoinHostPort(pod.IP, cmp.Or(pod.Annotations["coroot.com/memcached-scrape-port"], "11211")),
+		}
+	}
+
+	for typ, defaultPort := range map[TargetType]string{TargetTypeOpensearch: "9200", TargetTypeClickhouse: "8123"} {
+		p := "coroot.com/" + string(typ) + "-scrape"
+		if pod.Annotations[p] != "true" {
+			continue
+		}
+		t = &Target{
+			Type: typ,
+			Addr: net.JoinHostPort(pod.IP, cmp.Or(pod.Annotations[p+"-port"], defaultPort)),
+			Credentials: Credentials{
+				Username: pod.Annotations[p+"-credentials-username"],
+				Password: pod.Annotations[p+"-credentials-password"],
+			},
+			CredentialsSecret: CredentialsSecret{
+				Namespace:   pod.Id.Namespace,
+				Name:        pod.Annotations[p+"-credentials-secret-name"],
+				UsernameKey: pod.Annotations[p+"-credentials-secret-username-key"],
+				PasswordKey: pod.Annotations[p+"-credentials-secret-password-key"],
+			},
+			TLSSecret: tlsSecretFromPod(pod, string(typ)),
+			Params: map[string]string{
+				"tls": pod.Annotations[p+"-param-tls"],
+			},
 		}
 	}
 
