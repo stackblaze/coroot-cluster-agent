@@ -66,8 +66,7 @@ func server(t *testing.T, failOn string) *httptest.Server {
 		case strings.Contains(q, "version()"):
 			data = `[["25.3.6.56", 3600]]`
 		case strings.Contains(q, "system.asynchronous_metrics"):
-			data = `[["metric","Query",3],["metric","HTTPConnection",4],["metric","ReadonlyReplica",1],["event","FailedQuery",7],
-["event","QueryTimeMicroseconds",5000000],["async","MaxPartCountForPartition",280],
+			data = `[["metric","Query",3],["metric","HTTPConnection",4],["metric","ReadonlyReplica",1],["async","MaxPartCountForPartition",280],
 ["async","ReplicasMaxAbsoluteDelay",null],["setting","parts_to_throw_insert",3000],["setting","parts_to_delay_insert",1000]]`
 		case strings.Contains(q, "system.mutations"):
 			data = `[[4, 2, 1, 12.5, 2]]`
@@ -107,8 +106,6 @@ func TestCollect(t *testing.T) {
 		"clickhouse_failed_queries_per_second":                    0.05,
 		"clickhouse_query_seconds_per_second":                     0.2,
 		"clickhouse_inserted_rows_per_second":                     1000,
-		"clickhouse_events_total,event=FailedQuery":               7,
-		"clickhouse_events_total,event=QueryTimeMicroseconds":     5000000,
 		"clickhouse_async_metric,metric=MaxPartCountForPartition": 280,
 		"clickhouse_async_metric,metric=ReplicasMaxAbsoluteDelay": 0,
 		"clickhouse_parts_to_throw_insert":                        3000,

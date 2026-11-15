@@ -24,7 +24,6 @@ var (
 	dUptime      = common.Desc("clickhouse_uptime_seconds", "Server uptime")
 
 	dMetric      = common.Desc("clickhouse_metric", "Current value from system.metrics", "metric")
-	dEvent       = common.Desc("clickhouse_events_total", "Counter from system.events", "event")
 	dAsyncMetric = common.Desc("clickhouse_async_metric", "Value from system.asynchronous_metrics", "metric")
 
 	dReplicatedTables    = common.Desc("clickhouse_replicated_tables", "Number of replicated tables on this server")
@@ -69,13 +68,6 @@ SELECT 'metric' AS kind, metric AS name, toFloat64(value) AS value FROM system.m
 	'InterserverConnection', 'ReplicatedFetch', 'ReplicatedSend', 'ReplicatedChecks', 'ReadonlyReplica', 'DelayedInserts',
 	'MemoryTracking', 'ZooKeeperSession', 'ZooKeeperRequest', 'BackgroundMergesAndMutationsPoolTask',
 	'BackgroundMergesAndMutationsPoolSize', 'BackgroundFetchesPoolTask', 'BackgroundFetchesPoolSize')
-UNION ALL
-SELECT 'event', event, toFloat64(value) FROM system.events WHERE event IN (
-	'Query', 'SelectQuery', 'InsertQuery', 'FailedQuery', 'FailedSelectQuery', 'FailedInsertQuery',
-	'QueryTimeMicroseconds', 'SelectQueryTimeMicroseconds', 'InsertQueryTimeMicroseconds',
-	'InsertedRows', 'InsertedBytes', 'SelectedRows', 'SelectedBytes', 'DelayedInserts', 'RejectedInserts',
-	'MergedRows', 'MergedUncompressedBytes', 'ReplicatedPartFetches', 'ReplicatedPartFailedFetches',
-	'ZooKeeperHardwareExceptions', 'ZooKeeperUserExceptions', 'QueryMemoryLimitExceeded')
 UNION ALL
 SELECT 'async', metric, toFloat64(value) FROM system.asynchronous_metrics WHERE metric IN (
 	'MaxPartCountForPartition', 'ReplicasMaxAbsoluteDelay', 'ReplicasMaxQueueSize', 'ReplicasMaxInsertsInQueue',
@@ -247,8 +239,6 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 					v--
 				}
 				ch <- common.Gauge(dMetric, v, name)
-			case "event":
-				ch <- common.Counter(dEvent, v, name)
 			case "async":
 				ch <- common.Gauge(dAsyncMetric, v, name)
 			case "setting":
