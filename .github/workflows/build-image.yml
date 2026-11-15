@@ -1,0 +1,59 @@
+name: Build Image
+
+# StackBlaze fork: builds ghcr.io/stackblaze/coroot-cluster-agent on every
+# push to dev / main. Nothing is deployed from here: each cluster pins an
+# exact SHA tag (platform-provisioner, coroot.yaml `clusterAgent.image`).
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    # Same runners as the stackblaze/coroot image build.
+    runs-on: [self-hosted, kubero]
+    steps:
+      - uses: actions/checkout@v5
+
+      # Named builder + cleanup:false so the BuildKit cache persists on the
+      # self-hosted runner.
+      - uses: docker/setup-buildx-action@v3
+        with:
+          name: kubero-shared-builder
+          cleanup: false
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=branch
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.sha }}
