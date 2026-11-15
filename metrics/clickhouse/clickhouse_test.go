@@ -66,11 +66,15 @@ func server(t *testing.T, failOn string) *httptest.Server {
 		case strings.Contains(q, "version()"):
 			data = `[["25.3.6.56", 3600]]`
 		case strings.Contains(q, "system.asynchronous_metrics"):
-			data = `[["metric","Query",3],["metric","ReadonlyReplica",1],["event","FailedQuery",7],
+			data = `[["metric","Query",3],["metric","HTTPConnection",4],["metric","ReadonlyReplica",1],["event","FailedQuery",7],
 ["event","QueryTimeMicroseconds",5000000],["async","MaxPartCountForPartition",280],
 ["async","ReplicasMaxAbsoluteDelay",null],["setting","parts_to_throw_insert",3000],["setting","parts_to_delay_insert",1000]]`
 		case strings.Contains(q, "system.mutations"):
-			data = `[[4, 2, 1, 12.5]]`
+			data = `[[4, 2, 1, 12.5, 2]]`
+		case strings.Contains(q, "system.query_log"):
+			data = `[[120, 30, 6, 3, 12, 60000]]`
+		case strings.Contains(q, "partition_id"):
+			data = `[[2097152, 5000, 40]]`
 		case strings.Contains(q, "system.parts"):
 			data = `[["app","events",1048576,1000,12]]`
 		default:
@@ -86,11 +90,23 @@ func TestCollect(t *testing.T) {
 	c := New(srv.URL, "coroot", "secret", srv.Client(), time.Second, logger.NewKlog("test"))
 	got := collect(t, c)
 	want := map[string]float64{
-		"clickhouse_up":                                           1,
-		"clickhouse_info,version=25.3.6.56":                       1,
-		"clickhouse_uptime_seconds":                               3600,
-		"clickhouse_metric,metric=Query":                          3,
-		"clickhouse_metric,metric=ReadonlyReplica":                1,
+		"clickhouse_up":                            1,
+		"clickhouse_info,version=25.3.6.56":        1,
+		"clickhouse_uptime_seconds":                3600,
+		"clickhouse_metric,metric=Query":           3,
+		"clickhouse_metric,metric=ReadonlyReplica": 1,
+		// The scrape's own connection is not counted.
+		"clickhouse_metric,metric=HTTPConnection":                 3,
+		"clickhouse_running_queries":                              2,
+		"clickhouse_tables_size_bytes":                            2097152,
+		"clickhouse_tables_rows":                                  5000,
+		"clickhouse_max_parts_in_partition":                       40,
+		"clickhouse_queries_per_second,kind=select":               2,
+		"clickhouse_queries_per_second,kind=insert":               0.5,
+		"clickhouse_queries_per_second,kind=other":                0.1,
+		"clickhouse_failed_queries_per_second":                    0.05,
+		"clickhouse_query_seconds_per_second":                     0.2,
+		"clickhouse_inserted_rows_per_second":                     1000,
 		"clickhouse_events_total,event=FailedQuery":               7,
 		"clickhouse_events_total,event=QueryTimeMicroseconds":     5000000,
 		"clickhouse_async_metric,metric=MaxPartCountForPartition": 280,
@@ -147,5 +163,23 @@ func TestCollectLoginFailed(t *testing.T) {
 	got := collect(t, c)
 	if got["clickhouse_up"] != 0 || len(got) != 2 {
 		t.Errorf("want up=0 + one scrape error, got %v", got)
+	}
+}
+
+func TestCollectWithoutQueryLog(t *testing.T) {
+	srv := server(t, "system.query_log")
+	defer srv.Close()
+	c := New(srv.URL, "coroot", "secret", srv.Client(), time.Second, logger.NewKlog("test"))
+	got := collect(t, c)
+	for k := range got {
+		if strings.HasPrefix(k, "clickhouse_scrape_error") {
+			t.Errorf("a missing query log must not be a scrape error: %s", k)
+		}
+		if strings.HasPrefix(k, "clickhouse_queries_per_second") {
+			t.Errorf("no query rates without the query log: %s", k)
+		}
+	}
+	if got["clickhouse_tables_size_bytes"] != 2097152 {
+		t.Errorf("the other queries must still run: %v", got)
 	}
 }
